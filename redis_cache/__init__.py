@@ -2,6 +2,8 @@ from functools import wraps
 from json import dumps, loads
 from base64 import b64encode
 
+import logging
+from redis import RedisError
 
 def get_cache_lua_fn(client):
     if not hasattr(client, '_lua_cache_fn'):
@@ -135,17 +137,24 @@ class CacheDecorator:
 
         @wraps(fn)
         def inner(*args, **kwargs):
-            nonlocal self
-            key = self.get_key(args, kwargs)
-            result = self.client.get(key)
-            if not result:
-                result = fn(*args, **kwargs)
-                result_serialized = self.serializer(result)
-                get_cache_lua_fn(self.client)(keys=[key, self.keys_key], args=[result_serialized, self.ttl, self.limit])
-            else:
-                result = self.deserializer(result)
-            return result
-
+            result = None
+            try:
+                nonlocal self
+                key = self.get_key(args, kwargs)
+                result = self.client.get(key)
+           
+                if not result:
+                    result = fn(*args, **kwargs)
+                    result_serialized = self.serializer(result)
+                    get_cache_lua_fn(self.client)(keys=[key, self.keys_key], args=[result_serialized, self.ttl, self.limit])
+                else:
+                    result = self.deserializer(result)
+                return result 
+            
+            except RedisError as e:
+                logging.error(e)
+                return result or fn(*args, **kwargs)
+        
         inner.invalidate = self.invalidate
         inner.invalidate_all = self.invalidate_all
         inner.copy_old_keys = self.copy_old_keys
